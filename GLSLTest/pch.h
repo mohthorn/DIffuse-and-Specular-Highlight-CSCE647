@@ -23,6 +23,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <Windows.h>
 #include <opencv2/opencv.hpp>
+#include <random>
 // TODO: add headers that you want to pre-compile here
 
 #endif //PCH_H
