@@ -1,11 +1,11 @@
-// GLSLTest.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
+// HW1 2D Diffuse Shading
+// Chengyi Min 127004714
 
 #include "pch.h"
 #define WIDTH 800
 #define HEIGHT 800
 #define Radiant 300.0
-#define X 8 //for antialiasing
+#define X 1 //for antialiasing
 
 using namespace cv;
 using namespace glm;
@@ -36,7 +36,7 @@ double jitteringCircle(double x, double y, double x0, double y0, double r)
 		{
 			double m = x + (i + 0.5)*1.0 / X + ri / X;  //jittering
 			double n = y + (j + 0.5)*1.0 / X + rj / X;
-			sum += inCircle(m, n, x0, y0, Radiant);
+			sum += inCircle(m, n, x0, y0, r);
 		}
 	}
 	//if (sum <= 0.0001)
@@ -46,14 +46,14 @@ double jitteringCircle(double x, double y, double x0, double y0, double r)
 
 
 
-Mat colorLift(Mat & original, double value)
+Mat colorLift(Mat & original, double value,int channelStart, int channelEnd)
 {
 	Mat ret = original.clone();
-	for (int i = 0; i < original.rows; i++)
+	for (int i = 0; i < original.cols; i++)
 	{
-		for (int j = 0; j < original.cols; j++)
+		for (int j = 0; j < original.rows; j++)
 		{
-			for (int p = 0; p < 3; p++)
+			for (int p = channelStart; p < channelEnd; p++)
 			{
 				double cVal;
 				cVal = original.at<Vec3b>(Point(i, j))[p] + value;
@@ -72,26 +72,103 @@ Mat colorLift(Mat & original, double value)
 	return ret;
 }
 
-Mat diffuse(Mat & original, Mat & normal, Mat & specular, Mat &depth)
+
+Mat reflection(double dist, Mat & original, Mat & normal, Mat & env, Mat &depth, int glossy, int zAdjust = 0)
 {
 	Mat ret = original.clone();
-	Mat light = colorLift(original, 100);
-	Mat dark = colorLift(original, -200);
-	imshow("light", light);
-	imshow("dark", dark);
-	double lightSource[3] = { 200,200,400 };
-	for (int i = 0; i < original.rows; i++)
-	{ 
-		for (int j = 0; j < original.cols; j++)
+	int env_width = env.cols;
+	int env_height = env.rows;
+	printf("environment map: %d * %d\n", env_width, env_height);
+	double d = dist;
+	
+	std::random_device rd;  //Will be used to obtain a seed for the random number engine
+	std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
+	std::uniform_real_distribution<> dis(-0.1,0.1);
+	double r_exp = 1;
+	int steps = 1;
+	if (glossy)
+		steps = glossy;
+	for (int i = 0; i < original.cols; i++)
+	{
+		for (int j = 0; j < original.rows; j++)
 		{
-			vec3 L = normalize(vec3(lightSource[0] - i, lightSource[1] - j, lightSource[2]-depth.at<Vec3b>(Point(i, j))[1]/255.0*Radiant));
+
+			vec3 E = vec3(0,0,1);
+			double norm[3];
+			double real_d = d - (double)depth.at<Vec3b>(Point(i, j))[0];
+			for (int p = 0; p < 3; p++)
+			{
+				norm[p] = (double)normal.at<Vec3b>(Point(i, j))[p];
+				norm[p] = (2.0 * norm[p] / 255.0 - 1);
+			}
+			if (zAdjust)
+				norm[0] = (double)zAdjust/100.0;
+			
+
+			vec3 N = normalize(vec3(norm[2], norm[1], norm[0]));
+			double color[3] = { 0,0,0 };
+			for (int m = 0; m < steps; m++)
+				for (int n = 0; n < steps; n++)
+				{
+					if (glossy)
+						r_exp = dis(gen);
+					vec3 Re = -1.0f *E + 2.0f*dot(N, E)*N;
+
+					if (glossy)
+					{
+
+						double s1 = dis(gen);
+						double s2 = dis(gen);
+						double s3 = dis(gen);
+						Re = Re + vec3(s1, s2, s3);
+					}
+
+					//printf("%f,%f,%f\n", Re[0], Re[1], Re[2]);
+					float scale = (float)(real_d / fabs((double)Re[2] + 0.0001));
+
+					int x = i + Re[0] * scale + env_width / 2 - original.cols / 2;
+					int y = j + Re[1] * scale + env_height / 2 - original.rows / 2;
+					x = x % env_width;
+					y = y % env_height;
+					if (x < 0)
+						x = -x;
+
+					if (y < 0)
+						y = -y;
+
+					
+					for (int p = 0; p < 3; p++)
+					{
+						color[p] = color[p] + (double)env.at<Vec3b>(Point(x, y))[p];
+					}
+				}
+			double ks = 0.8;
+			for (int p = 0; p < 3; p++)
+			{
+				ret.at<Vec3b>(Point(i, j))[p] = (1 - ks)*original.at<Vec3b>(Point(i, j))[p] + ks * color[p]/(steps*steps);
+			}
+			
+		}
+	}
+	return ret;
+}
+
+Mat diffuse(vec3 LS, Mat & dark,Mat &light, Mat & normal, Mat &depth, bool zAdjust =FALSE)
+{
+	Mat ret = dark.clone();
+	for (int i = 0; i < dark.cols; i++)
+	{ 
+		for (int j = 0; j < dark.rows; j++)
+		{
+			vec3 L = normalize(vec3(LS[0] - i, LS[1] - j, LS[2] - depth.at<Vec3b>(Point(i, j))[1]));
 			double norm[3];
 			for (int p = 0; p < 3; p++)
 			{
 				norm[p]=(double)normal.at<Vec3b>(Point(i, j))[p];
 				norm[p] = (2*norm[p] / 255.0 -1 );				
 			}
-			norm[0] = sqrt(1 - norm[1] * norm[1] - norm[2] * norm[2]);
+			if(zAdjust)
+				norm[0] = (double)zAdjust / 100.0;
 
 			vec3 N = normalize(vec3(norm[2], norm[1], norm[0]));
 			double t = ((double)dot(L, N) + 1) / 2.0;
@@ -100,64 +177,249 @@ Mat diffuse(Mat & original, Mat & normal, Mat & specular, Mat &depth)
 				double cVal = light.at<Vec3b>(Point(i, j))[p] * t + dark.at<Vec3b>(Point(i, j))[p] *(1-t);
 				ret.at<Vec3b>(Point(i, j))[p] = cVal;
 			}
-			vec3 R = -1.0f * L + 2.0f *(dot(L, N)*N) ;
-			vec3 E = vec3(0, 0, 1);
-			double s = ((double)dot(R, E) + 1) / 2.0;
-			double ks = 0.9;
-			for (int p = 0; p < 3; p++)
-			{
-				double cVal = ret.at<Vec3b>(Point(i, j))[p] * (1-(ks*s)) + specular.at<Vec3b>(Point(i, j))[p] * (ks*s);
-				ret.at<Vec3b>(Point(i, j))[p] = cVal;
-			}
 		}
 	}	
 	return ret;
 }
 
-void circleDiffusion()
+Mat specular(vec3 LS, Mat diffused, Mat normal, Mat specular, Mat depth,bool zAdjust = FALSE)
 {
-	Mat original(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
-	Mat depth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
-	Mat normal(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255/2.0, 255/2.0));
-	Mat specular(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255, 255));
-	for (int i = 0; i < depth.rows; i++)
-		for (int j = 0; j < depth.cols; j++)
+	Mat ret = diffused.clone();
+	double s_exp = 6;
+
+	for (int i = 0; i < diffused.cols; i++)
+	{
+		for (int j = 0; j < diffused.rows; j++)
+		{
+			vec3 L = normalize(vec3(LS[0] - i, LS[1] - j, LS[2] - depth.at<Vec3b>(Point(i, j))[1]));
+			double norm[3];
+			for (int p = 0; p < 3; p++)
+			{
+				norm[p] = (double)normal.at<Vec3b>(Point(i, j))[p];
+				norm[p] = (2 * norm[p] / 255.0 - 1);
+			}
+			if (zAdjust)
+				norm[0] = (double)zAdjust / 100.0;
+
+			vec3 N = normalize(vec3(norm[2], norm[1], norm[0]));
+
+			vec3 R = -1.0f * L + 2.0f *(dot(L, N)*N);
+			vec3 E = vec3(0, 0, 1);
+			double s = ((double)dot(R, E) + 1) / 2.0;
+			//double ks = 0.9;
+			for (int p = 0; p < 3; p++)
+			{
+				double cVal = ret.at<Vec3b>(Point(i, j))[p] * (1 - pow(s,s_exp)) + specular.at<Vec3b>(Point(i, j))[p] * (pow(s, s_exp));
+				ret.at<Vec3b>(Point(i, j))[p] = cVal;
+			}
+		}
+	}
+	return ret;
+}
+
+double emboss(Mat original, int direction, double x, double y,int steps)    //direction 0: horizontal, 1:vertical
+{
+	double result = 0;
+
+	mat3 hori = mat3{
+		-1,0,1,
+		-2,0,2,
+		-1,0,1
+	};
+	mat3 vert = mat3{
+	-1,-2,-1,
+	0,0,0,
+	1,2,1
+	};
+
+	mat3x3 ori = mat3{ 0.0f };
+	for(int i=0;i<3;i++)
+		for (int j =0; j < 3; j++)
+		{
+			int x0 = x - (1 + i)*steps;
+			int y0 = y - (1 + j)*steps;
+			if (x0 < 0)
+				x0 = 0;
+			if (y0 < 0)
+				y0 = 0;
+			if (x0 >=original.cols)
+				x0 = original.cols - 1;
+			if (y0 >=original.rows)
+				y0 = original.rows - 1;
+			ori[i][j] = original.at<Vec3b>(Point(x0, y0))[0];
+		}
+	mat3 reM;
+	if (direction == 0)
+	{
+		reM = matrixCompMult(hori, ori);
+	}
+	if (direction == 1)
+	{
+		reM = matrixCompMult(vert, ori);
+	}
+
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++)
+			result += reM[i][j];
+	if( fabs(result )< 20)
+		result = 0;
+	return result/4.0;
+}
+
+void find_point(Mat &mat, int x, int y, int &a, int &b)
+{
+	a = x;
+	b = y;
+	if (a < 0)
+		a = -a;
+	if (b < 0)
+		b = -b;
+	if (a >= mat.cols)
+		a = 2 * (mat.cols - 1) - a;
+	if (b >= mat.rows)
+		b = 2 * (mat.rows - 1) - b;
+}
+
+Mat depth2Normal(Mat mat,double para)  //the size should be odd
+{
+	Mat ret = mat.clone();
+	for (int i = 0; i < ret.cols; i++)
+	{
+		for (int j = 0; j < ret.rows; j++)
+		{
+			double vec[3];
+
+			vec[1] = emboss(mat,0,i,j,5);
+
+			vec[2] = emboss(mat, 1, i, j, 5);;
+			//vec[1] = vec[1] / 10.0 ;
+			//vec[2] = vec[2] / 10.0;
+			vec[0] = 1;
+			//printf("%lf\n",vec[1]);
+			vec3 N = normalize(vec3(vec[0], vec[1], vec[2]));
+			for (int channels = 0; channels < 3; channels++)
+			{
+				double color = (N[channels] + 1.0f) * 255.0f /2.0f;
+				ret.at<Vec3b>(Point(i, j))[channels] = color;
+			}
+		}
+	}
+	return ret;
+}
+
+Mat depthDiffuse(vec3 LS, Mat & dark, Mat &light, Mat & normal, Mat &depth, bool zAdjust = FALSE)
+{
+	Mat ret = dark.clone();
+	for (int i = 0; i < dark.cols; i++)
+	{
+		for (int j = 0; j < dark.rows; j++)
+		{
+			vec3 L = normalize(vec3(LS[0] - i, LS[1] - j, LS[2] - depth.at<Vec3b>(Point(i, j))[1]));
+			double norm[3];
+			for (int p = 0; p < 3; p++)
+			{
+				norm[p] = (double)normal.at<Vec3b>(Point(i, j))[p];
+				norm[p] = (2 * norm[p] / 255.0 - 1);
+			}
+			if (zAdjust)
+				norm[0] = (double)zAdjust / 100.0;
+
+			vec3 N = normalize(vec3(norm[2], norm[1], norm[0]));
+			double t = ((double)dot(L, N) + 1) / 2.0;
+			for (int p = 0; p < 3; p++)
+			{
+				double cVal = light.at<Vec3b>(Point(i, j))[p] * t + dark.at<Vec3b>(Point(i, j))[p] * (1 - t);
+				ret.at<Vec3b>(Point(i, j))[p] = cVal;
+			}
+		}
+	}
+	return ret;
+}
+
+void circleGeneration(int x0, int y0 , int r, Mat & original, Mat & depth, Mat &normal,Mat &specular)
+{
+
+	for (int i = 0; i < depth.cols; i++)
+		for (int j = 0; j < depth.rows; j++)
 		{
 			double z = 0;
-			if ((z = jitteringCircle(i, j, 400, 400, Radiant)) >0.1)
+			if ((z = jitteringCircle(i, j, x0, y0, r)) >0.1)
 			{
 				Vec3b color = depth.at<Vec3b>(Point(i, j));
-				z *= Radiant;
-				color[0] = z/ Radiant * 255;
-				color[1] = z/ Radiant * 255;
-				color[2] = z/ Radiant * 255;
+				z *= r;
+				color[0] = z/ r * 255;
+				color[1] = z/ r * 255;
+				color[2] = z/ r * 255;
 				depth.at<Vec3b>(Point(i, j)) = color;
+				original.at<Vec3b>(Point(i, j))[0] = 255;
 				original.at<Vec3b>(Point(i, j))[1] = 255;
-				vec3 colorVec = normalize(vec3(z, (j - 400) , (i - 400)));
+				original.at<Vec3b>(Point(i, j))[2] = 255;
+				vec3 colorVec = normalize(vec3(z, (j - y0) , (i - x0)));
 				normal.at<Vec3b>(Point(i, j))[0] = (colorVec[0] + 1) / 2.0 * 255;
-				normal.at<Vec3b>(Point(i, j))[1] = (colorVec[1]+1)/2.0*255;
-				normal.at<Vec3b>(Point(i, j))[2] = (colorVec[2]+1) / 2.0 * 255;
-				specular.at<Vec3b>(Point(i, j))[0] = 255;
-				specular.at<Vec3b>(Point(i, j))[1] = 255;
-				specular.at<Vec3b>(Point(i, j))[2] = 255;
+				normal.at<Vec3b>(Point(i, j))[1] = (colorVec[1] + 1)/ 2.0 * 255;
+				normal.at<Vec3b>(Point(i, j))[2] = (colorVec[2] + 1) / 2.0 * 255;
+				//specular.at<Vec3b>(Point(i, j))[0] = 255;
+				//specular.at<Vec3b>(Point(i, j))[1] = 255;
+				//specular.at<Vec3b>(Point(i, j))[2] = 255;
 			}
-
 		}
-	imshow("original", original);
-	//imshow("depth", depth);
-	imwrite("depth.png", depth);
-	imshow("normal", normal);
-	imwrite( "normal.png", normal);
-	imshow("specular", specular);
-	Mat dif=diffuse(original, normal,specular,depth);
-	imshow("dif", dif);
-	imwrite("result.png", dif);
-	waitKey(0); // Wait for a keystroke in the window
 }
 
 int main()
 {
-	circleDiffusion();
+	//Normal map result
+	//Mat original = imread("original.jpg", IMREAD_COLOR);
+	//Mat normal = imread("SM.png", IMREAD_COLOR);
+	//Mat dark = imread("DI0.jpg", IMREAD_COLOR);
+	//Mat light = imread("DI1.jpg", IMREAD_COLOR);
+	//imshow("normal", normal);
+	//Mat depth(original.rows, original.cols, CV_8UC3, Scalar(0, 0, 0));
+	//imshow("depth", depth);
+	//vec3 lightSource = vec3(100, 200, 400);
+	//Mat specularMap(original.rows, original.cols, CV_8UC3, Scalar(255, 255, 255 ));
+	//Mat diffused = diffuse(lightSource, dark,light, normal, depth,TRUE);
+	//Mat env = imread("wallpaper.jpg", IMREAD_COLOR);
+	//Mat speculared = specular(lightSource, diffused, normal, specularMap, depth, TRUE);
+	//Mat reflected = reflection(300, speculared, normal, env, depth,0, 150);
+
+	//imwrite("normalresult.png", reflected);
+	//***********************
+	//depth map result
+	//vec3 lightSource = vec3(100, 200, 400);
+	//Mat original = imread("horse.jpg", IMREAD_COLOR);
+	//Mat depth = imread("horse.jpg", IMREAD_COLOR);
+	////imshow("normal", normal);
+	//Mat emboss = depth2Normal(depth, 1);
+	//imshow("emboss", emboss);
+	//imwrite("emboss.jpg", emboss);
+	//Mat light = colorLift(original, 100, 0, 3);
+	//Mat dark = colorLift(original, -255, 0, 3);
+	//Mat diffused = diffuse(lightSource, dark,light, emboss, depth,TRUE);
+	//Mat specularMap(original.rows, original.cols, CV_8UC3, Scalar(255, 255, 255 ));
+	//Mat env = imread("wallpaper.jpg", IMREAD_COLOR);
+	//Mat speculared = specular(lightSource, diffused, emboss, specularMap, depth, TRUE);
+	//Mat reflected = reflection(300, speculared, emboss, env, depth,0, 140);
+	//imwrite("depthreflect.jpg", reflected);
+	//waitKey(0);
+	/*********************/
+	Mat original(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
+	Mat depth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
+	Mat normal(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255 / 2.0, 255 / 2.0));
+	Mat specularMap(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255, 255));
+	Mat flattenDepth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
+	circleGeneration(400,400,300,original, depth, normal, specularMap);
+	Mat env = imread("wallpaper.jpg", IMREAD_COLOR);
+	imshow("normal", normal);
+	Mat light = colorLift(original, 100, 0, 3);
+	Mat dark = colorLift(original, -255, 0, 3);
+	vec3 lightSource = vec3(0, 0, 100);
+	Mat diffused = diffuse(lightSource, dark,light, normal, depth);
+
+	Mat speculared = specular(lightSource, diffused, normal, specularMap, depth);
+	Mat ref = reflection(300, diffused, normal, env, depth,0,120);
+	//imshow("dif", diffused);
+	//imshow("ref", speculared);
+	imshow("ref", ref);
+	imwrite("sphereresult.png", ref);
+	waitKey(0);
 }
-
-
