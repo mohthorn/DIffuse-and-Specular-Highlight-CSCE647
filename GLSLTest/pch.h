@@ -29,3 +29,5 @@
 #endif //PCH_H
 
 using namespace std;
+using namespace cv;
+using namespace glm;
