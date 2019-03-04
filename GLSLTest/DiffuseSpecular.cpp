@@ -7,7 +7,7 @@
 #define Radiant 300.0
 #define X 1 //for anti aliasing
 
-
+double callShadow(Mat &depth, int i, int j, vec3 LS, int r);
 
 Mat simpleBlur(Mat & original)
 {
@@ -333,7 +333,8 @@ Mat diffuse(vec3 LS, Mat & dark,Mat &light, Mat & normal, Mat &depth, int zAdjus
 				norm[0] = (double)zAdjust / 100.0;
 
 			vec3 N = normalize(vec3(norm[2], norm[1], norm[0]));
-			double t = ((double)dot(L, N) + 1) / 2.0;
+			/*double t = ((double)dot(L, N) + 1) / 2.0;*/
+			double t = callShadow(depth, i, j, LS, 0);
 			for (int p = 0; p < 3; p++)
 			{
 				double cVal = light.at<Vec3b>(Point(i, j))[p] * t*t + dark.at<Vec3b>(Point(i, j))[p] *(1-t*t);
@@ -451,9 +452,9 @@ Mat depth2Normal(Mat mat,double para)  //the size should be odd
 		{
 			double vec[3];
 
-			vec[1] = emboss(mat,0,i,j,para,20);
+			vec[1] = emboss(mat,0,i,j,para,10);
 
-			vec[2] = emboss(mat, 1, i, j, para,20);
+			vec[2] = emboss(mat, 1, i, j, para,10);
 			//vec[1] = vec[1] / 10.0 ;
 			//vec[2] = vec[2] / 10.0;
 			vec[0] = 1;
@@ -547,7 +548,7 @@ void circleGeneration(int x0, int y0 , int r, Mat & original, Mat & depth, Mat &
 				depth.at<Vec3b>(Point(i, j)) = color;
 				original.at<Vec3b>(Point(i, j))[0] = 255;
 				original.at<Vec3b>(Point(i, j))[1] = 255;
-				original.at<Vec3b>(Point(i, j))[2] = 255;
+				//original.at<Vec3b>(Point(i, j))[2] = 255;
 				vec3 colorVec = normalize(vec3(z, (j - y0) , (i - x0)));
 				normal.at<Vec3b>(Point(i, j))[0] = (colorVec[0] + 1) / 2.0 * 255;
 				normal.at<Vec3b>(Point(i, j))[1] = (colorVec[1] + 1)/ 2.0 * 255;
@@ -557,6 +558,69 @@ void circleGeneration(int x0, int y0 , int r, Mat & original, Mat & depth, Mat &
 				//specular.at<Vec3b>(Point(i, j))[2] = 255;
 			}
 		}
+}
+
+double callShadow(Mat &depth, int i, int j, vec3 LS, int r=0)
+{
+	//mock 3D
+	vec2 alias[4] = { vec2(-1,-1),vec2(-1,0),vec2(0,-1),vec2(0,0) };
+
+	double diff_x = fabs(LS[0] - i);
+	double diff_y = fabs(LS[1] - j);
+	double nsh = 1;
+	int steps = (int)std::max(diff_x, diff_y);
+
+	int x = i;
+	int y = j;
+	double d = depth.at<Vec3b>(Point(i, j))[0];
+
+	double z = d+0.5;
+
+	double counter = 0;
+
+	double trueDepth = depth.at<Vec3b>(Point(x, y))[0];
+
+	double neps = 0.1;
+
+	for (int ii = 0; ii < steps; ii++)
+	{
+		//for (int m = 0; m < 4; m++)
+		//{
+			x = i + ii * (LS[0] - i)*1.0 / (double)steps/* + alias[m][0]*/;
+			y = j + ii * (LS[1] - j)*1.0 / (double)steps /*+ alias[m][1]*/;
+			z = d - neps + ii * (LS[2] - d + neps)*1.0 / (double)steps;
+			if (x >= depth.cols)
+				x = depth.cols - 1;
+			if (x < 0)
+				x = 0;
+			if (y >= depth.rows)
+				y = depth.rows - 1;
+			if (y < 0)
+				y = 0;
+			trueDepth = depth.at<Vec3b>(Point(x, y))[0];
+			if (trueDepth > z)
+				counter++;
+		//}
+	}
+	//counter /= 4.0;
+	nsh = pow(1-counter*1.0/(double)(steps+0.001),5);
+	//nsh = neps*1.0 / (counter+neps+0.01);
+	//if (nsh > 1)
+	//	nsh = 1;
+	return nsh;
+}
+
+Mat shadowCast(vec3 LS, Mat diffused, Mat depth, int hScale = 0,int r=0)
+{
+	Mat ret = diffused.clone();
+	for(int i=0;i<depth.cols;i++)
+		for (int j = 0; j < depth.rows; j++)
+		{
+			double isShadow = callShadow(depth, i, j, LS,r);
+			for(int channel=0;channel<3;channel++)
+				ret.at<Vec3b>(Point(i, j))[channel] = isShadow * ret.at<Vec3b>(Point(i, j))[channel];
+		}
+	return ret;
 }
 
 int main()
@@ -589,50 +653,17 @@ int main()
 	//Mat depth = imread("horse.jpg", IMREAD_COLOR);
 	////imshow("normal", normal);
 	//Mat emboss = depth2Normal(depth, 5);
-	//imshow("emboss", emboss);
 	//imwrite("emboss.jpg", emboss);
-	//Mat light = colorLift(original, 100, 0, 3);
-	//Mat dark = colorLift(original, -255, 0, 3);
+	//Mat light(original.cols, original.rows, CV_8UC3, Scalar(0, 0, 125));
+	//Mat dark(original.cols, original.rows, CV_8UC3, Scalar(125, 0, 0));
 	//Mat diffused = diffuse(lightSource, dark,light, emboss, depth,TRUE);
 	//Mat specularMap(original.rows, original.cols, CV_8UC3, Scalar(255, 255, 255 ));
 	//Mat speculared = specular(lightSource, diffused, emboss, specularMap, depth, TRUE);
-	//Mat refr = refraction(-300, diffused, emboss, bg, depth, 2.0/3.0, 8, 0);
-	//Mat refl = reflection(300, diffused, emboss, env, depth, 0, 150);
-	//Mat f = fresnel(emboss, refl, refr);
-	//imwrite("depthresult.jpg", f);
+	////Mat refr = refraction(-300, diffused, emboss, bg, depth, 2.0/3.0, 8, 0);
+	////Mat refl = reflection(300, diffused, emboss, env, depth, 0, 150);
+	////Mat f = fresnel(emboss, refl, refr);
+	//imwrite("depthresult.jpg", speculared);
 	//waitKey(0);
-	/*********************/
-	Mat original(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
-	Mat depth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
-	Mat normal(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255 / 2.0, 255 / 2.0));
-	Mat specularMap(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255, 255));
-	Mat flattenDepth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
-	circleGeneration(400,400,300,original, depth, normal, specularMap);
-
-	//cv::imshow("normal", normal);
-	Mat light = colorLift(original, 0, 0, 3);
-	Mat dark = colorLift(original, -255, 0, 3);
-	vec3 lightSource = vec3(0, 0, 100);
-	Mat diffused = diffuse(lightSource, dark,light, normal, depth);
-	//cv::imshow("dif", diffused);
-	/*Mat speculared = specular(lightSource, diffused, normal, specularMap, depth);
-	cv::imshow("speculared", speculared);*/
-	/*Mat ref = reflection(300, diffused, normal, env, depth,0,120);*/
-	Mat refr = refraction(-300, diffused, normal, bg, depth, 2.0/3.0, 0, 120);
-	Mat refl = reflection(300, diffused, normal, env, depth, 0, 150);
-	
-	//imshow("dif", diffused);
-	//imshow("ref", speculared);
-	cv::imshow("refr", refr);
-	cv::imshow("refl", refl);
-	
-	Mat f = fresnel(normal, refl, refr);
-	Mat speculared = specular(lightSource, f, normal, specularMap, depth);
-	cv::imshow("speculared", speculared); 
-	cv::imwrite("spherefakeFresnel.png", speculared);
-	cv::imshow("f", f);
-	cv::waitKey(0);
-
 	/*********************/
 	//Mat original(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
 	//Mat depth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
@@ -645,18 +676,15 @@ int main()
 	//Mat light = colorLift(original, 0, 0, 3);
 	//Mat dark = colorLift(original, -255, 0, 3);
 	//vec3 lightSource = vec3(0, 0, 100);
-
-	//normal = shpereGradientField(depth, 400,400,300);
-	//imshow("normal", normal);
-
 	//Mat diffused = diffuse(lightSource, dark,light, normal, depth);
 	////cv::imshow("dif", diffused);
 	///*Mat speculared = specular(lightSource, diffused, normal, specularMap, depth);
 	//cv::imshow("speculared", speculared);*/
 	///*Mat ref = reflection(300, diffused, normal, env, depth,0,120);*/
-	//Mat refr = refraction(-300, diffused, normal, bg, depth, 2.0/3.0, 4, 120);
+	//Mat refr = refraction(-300, diffused, normal, bg, depth, 2.0/3.0, 0, 120);
 	//Mat refl = reflection(300, diffused, normal, env, depth, 0, 150);
-
+	//
+	////imshow("dif", diffused);
 	////imshow("ref", speculared);
 	//cv::imshow("refr", refr);
 	//cv::imshow("refl", refl);
@@ -667,4 +695,42 @@ int main()
 	//cv::imwrite("spherefakeFresnel.png", speculared);
 	//cv::imshow("f", f);
 	//cv::waitKey(0);
+
+	/*********************/
+	Mat original(WIDTH, HEIGHT, CV_8UC3, Scalar(125,125, 125));
+	Mat depth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
+	Mat normal(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255 / 2.0, 255 / 2.0));
+	Mat specularMap(WIDTH, HEIGHT, CV_8UC3, Scalar(255, 255, 255));
+	Mat flattenDepth(WIDTH, HEIGHT, CV_8UC3, Scalar(0, 0, 0));
+	circleGeneration(400,400,300,original, depth, normal, specularMap);
+
+	//cv::imshow("normal", normal);
+	Mat light = colorLift(original, 0, 0, 3);
+	Mat dark = colorLift(original, -200, 0, 3);
+	vec3 lightSource = vec3(0, 0, 800);
+
+	normal = shpereGradientField(depth, 400,400,300);
+	imshow("normal", normal);
+
+	Mat diffused = diffuse(lightSource, dark,light, normal, depth);
+	cv::imshow("dif", diffused);
+	/*Mat speculared = specular(lightSource, diffused, normal, specularMap, depth);
+	cv::imshow("speculared", speculared);*/
+	/*Mat ref = reflection(300, diffused, normal, env, depth,0,120);*/
+	//Mat refr = refraction(-300, diffused, normal, bg, depth, 2.0/3.0, 4, 120);
+	//Mat refl = reflection(300, diffused, normal, env, depth, 0, 150);
+
+	////imshow("ref", speculared);
+	//cv::imshow("refr", refr);
+	//cv::imshow("refl", refl);
+	//
+	//Mat f = fresnel(normal, refl, refr);
+	Mat speculared = specular(lightSource, diffused, normal, specularMap, depth);
+	cv::imshow("speculared", speculared); 
+	cv::imwrite("spherefakeFresnel.png", speculared);
+	//cv::imshow("f", f);
+	//Mat shadow = shadowCast(lightSource, original, depth,0,0);
+	//cv::imshow("shadow", shadow);
+	//imwrite("spherShadow.png", shadow);
+	cv::waitKey(0);
 }
